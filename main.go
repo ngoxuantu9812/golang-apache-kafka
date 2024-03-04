@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/Shopify/sarama"
 	"github.com/gofiber/fiber/v2/log"
 	_ "github.com/lib/pq"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -20,14 +20,25 @@ const keyServerAddr = "keyServerAddr"
 
 func main() {
 	connectDatabase()
+	//connectApacheKafka()
+
+	topic := "hello_world"
+	worker, err := connectConsumer([]string{"redpanda:9092"})
+	if err != nil {
+		panic(err)
+	}
+	// calling ConsumePartition. It will open one connection per broker
+	// and share it for all partitions that live on it.
+	_, err = worker.ConsumePartition(topic, 0, sarama.OffsetOldest)
+	if err == nil {
+		fmt.Println("Consumer started")
+	}
 	createServer()
 
 }
 
 func createServer() {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", getRoot)
-	mux.HandleFunc("/hello", getHello)
 	mux.HandleFunc("/comment", createComment)
 	ctx := context.Background()
 	server := &http.Server{
@@ -53,33 +64,6 @@ func connectDatabase() {
 	if err != db.Ping() {
 		fmt.Println(db.Ping())
 	}
-}
-func getRoot(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		io.WriteString(w, "This is my website with only get method\n")
-	case http.MethodPost:
-		io.WriteString(w, "This is my website with only post method\n")
-	case http.MethodPut:
-		io.WriteString(w, "This is my website with only put method\n")
-	case http.MethodPatch:
-		io.WriteString(w, "This is my website with only patch method\n")
-	case http.MethodDelete:
-		io.WriteString(w, "This is my website with only delete method\n")
-
-	}
-}
-
-func getHello(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	fmt.Printf("%s: got /hello request\n", ctx.Value(keyServerAddr))
-	myName := r.PostFormValue("myName")
-	if myName == "" {
-		w.Header().Set("x-missing-fied", "myName")
-		w.WriteHeader(http.StatusBadRequest)
-	}
-	io.WriteString(w, fmt.Sprintf("Hello, %s!\n", myName))
 }
 
 func connectApacheKafka() {
@@ -176,7 +160,7 @@ func ConnectProducer(brokerUrl []string) (sarama.SyncProducer, error) {
 }
 
 func PushCommentToQueue(topic string, message []byte) error {
-	brokersUrl := []string{"kafkahost1:9092", "kafkahost2:9092"}
+	brokersUrl := []string{"redpanda:9092"}
 	producer, err := ConnectProducer(brokersUrl)
 	if err != nil {
 		return err
@@ -195,17 +179,27 @@ func PushCommentToQueue(topic string, message []byte) error {
 }
 
 type Comment struct {
-	Text string `form:"text" json:"text"`
+	Message string `json:"message"`
 }
 
 func createComment(w http.ResponseWriter, r *http.Request) {
-	// Instantiate new Message struct
+	var cmt Comment
+	err := json.NewDecoder(r.Body).Decode(&cmt)
+	fmt.Println(cmt)
+	cmtInBytes, err := json.Marshal(cmt)
+	err = PushCommentToQueue("hello_world", cmtInBytes)
+	if err != nil {
+		return
+	}
+}
 
-	fmt.Println(w)
-	cmt := new(Comment)
-	cmt.f = "Hello, I'm Tu"
-	err = PushCommentToQueue("comments", cmt)
-	//if err != nil {
-	//	return
-	//}
+func connectConsumer(brokersUrl []string) (sarama.Consumer, error) {
+	config := sarama.NewConfig()
+	config.Consumer.Return.Errors = true
+	// NewConsumer creates a new consumer using the given broker addresses and configuration
+	conn, err := sarama.NewConsumer(brokersUrl, config)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
