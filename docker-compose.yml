@@ -23,7 +23,14 @@ services:
     networks:
       - internal
     restart: always
-  #
+  db:
+    image: postgres
+    restart: always
+    shm_size: 128mb
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_PASSWORD: root
   kafka:
     image: 'docker.io/bitnami/kafka:2-debian-10'
     ports:
